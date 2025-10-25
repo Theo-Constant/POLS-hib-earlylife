@@ -42,6 +42,7 @@ library(dplyr)
 Data<-read.csv2("data.csv",header=TRUE,sep=";",dec=",", stringsAsFactors = FALSE)
 Data_beha<-read.csv2("data_behaviors.csv",header=TRUE,sep=";",dec=",", stringsAsFactors = FALSE)
 
+
 ##########
 #Test whether behavior shows repeatability over time in order to be considered personality.
 ##########
@@ -156,992 +157,1185 @@ c(ICCrawPop8 = ICCrawPop8)
 #Number_rearing is not considered as personality traits
 
 
-#########################
-#Test of the POLS hypothesis with all individuals 
-##########################
-#Variable selection
+# ============================================================
+# === 1. Define variables and categories ====================
+# ============================================================
 
-# Variables
-variables <- c("Growth_rate", 
-               "Delta_telomere_experiment", "Telomere_pre_hibernation", 
-               "Temperature_torpor", 
-               "log_Mean_cortisol", "Torpor_bout_duration", 
-               "Time_inter_torpor","Time_torpor", "Offspring_per_litter", 
-               "Offspring_growth_rate", "Offspring_number","Number_transition")
-
-# Results table
-resultats_table <- data.frame(
-  Model_Number = integer(),
-  N_data = integer(),
-  Dependent_Variable = character(),
-  Variables = character(),
-  Estimate = numeric(),
-  Std_Error = numeric(),
-  p_value = numeric(),
-  Significance = character(),
-  Adjusted_p_value = numeric(),
-  Adjusted_Significance = character(),
-  stringsAsFactors = FALSE
+traits <- c(
+  "Growth_rate", "Temperature_torpor", "Torpor_bout_duration",
+  "Time_inter_torpor", "Time_torpor", "Delta_telomere_experiment",
+  "Telomere_pre_hibernation",
+  "log_Mean_cortisol", "Number_transition",
+  "Offspring_per_litter", "Offspring_number", "Offspring_growth_rate"
 )
 
-# Initialize a global counter for model numbers
-model_counter <- 0
 
-# Create a list to store models
-model_list <- list()
+# Create a vector to store the names of the transformed variables
+variables <- c()
 
-# Test all variable pairs
-for (var1 in variables) {
-  for (var2 in variables) {
-    # Avoid testing a variable against itself
-    if (var1 != var2) {
-      
-      # Identify necessary columns
-      colonnes_utiles <- c(var1, var2, "Mother")
-      
-      # Filter data to exclude NA in useful columns
-      Data_filtered <- na.omit(Data[, colonnes_utiles])
-      
-      if (nrow(Data_filtered) == 0) {
-        next
-      }
-      
-      # Define the model with lme for each pair of variables
-      formule <- as.formula(paste(var1, "~", var2))
-      model <- lme(formule, random = ~1 | Mother, method = "ML", na.action = "na.fail", data = Data_filtered)
-      
-      # Increment model counter
-      model_counter <- model_counter + 1
-      
-      # Save the model to the list
-      model_list[[paste0("Model_", model_counter)]] <- model
-      
-      # Extract information on coefficients
-      model_summary <- summary(model)
-      coef_table <- as.data.frame(model_summary$tTable)
-      for (i in 1:nrow(coef_table)) {
-        coef_info <- coef_table[i, ]
-        n_data <- nrow(Data_filtered)
-        
-        var_name <- rownames(coef_table)[i]  
-        estimate <- as.numeric(coef_info["Value"])
-        std_error <- as.numeric(coef_info["Std.Error"])
-        Pr_z <- as.numeric(coef_info["p-value"])
-        
-        # Determine significance level
-        if (Pr_z < 0.001) {
-          significance <- "***"
-        } else if (Pr_z < 0.01) {
-          significance <- "**"
-        } else if (Pr_z < 0.05) {
-          significance <- "*"
-        } else {
-          significance <- "ns"  
-        }
-        
-        # Add information to the results table
-        resultats_table <- rbind(resultats_table, data.frame(
-          Model_Number = model_counter,  
-          N_data = n_data,
-          Dependent_Variable = var1,
-          Variables = var_name,
-          Estimate = format(round(estimate, 4), nsmall = 3, scientific = FALSE),
-          Std_Error = format(round(std_error, 4), nsmall = 3, scientific = FALSE),
-          p_value = format(round(Pr_z, 4), nsmall = 3, scientific = FALSE),
-          Significance = significance  
-        ))
-      }
-    }
-  }
+for (var in traits) {
+  # Subset data without missing values
+  temp_data <- na.omit(Data[, c(var, "Mother", "Sex")])
+  
+  # Fit the LME model with Sex as a fixed effect
+  model <- lme(as.formula(paste(var, "~ Sex")), random = ~1|Mother, method = "ML", data = temp_data)
+  
+  # Store the residuals in the main Data frame
+  res_name <- paste0("res_", var)
+  Data[, res_name] <- NA
+  Data[rownames(temp_data), res_name] <- residuals(model)
+  
+  # Add the name of the transformed variable to 'variables'
+  variables <- c(variables, res_name)
+  
+  cat(sprintf("Residuals for %s computed: %d values\n", var, sum(!is.na(residuals(model)))))
 }
 
-# Filter models with at least one significant variable other than the intercept
-resultats_significatifs <- resultats_table %>%
-  group_by(Model_Number) %>%
-  filter(any(Significance %in% c("*", "**", "***") & Variables != "(Intercept)"))
-
-# Generate a PDF file for diagnostics
-pdf("Model_Diagnostics.pdf", width = 8, height = 10)
-
-# Apply diagnostics tests to all models
-for (model_name in names(model_list)) {
-  model <- model_list[[model_name]]
-  
-  # Add a title page for each model
-  plot.new()
-  title(main = paste("Diagnostics for", model_name))
-  
-  # Model summary
-  plot.new()
-  text(0, 1, paste("Model Summary for", model_name), adj = 0, cex = 1.2)
-  model_summary <- capture.output(summary(model))
-  text(0, 0.9, paste(model_summary, collapse = "\n"), adj = 0, cex = 0.7)
-  
-  # Density Plot of Residuals with Normal Curve Overlay
-  residuals <- resid(model)
-  plot(density(residuals), main = paste("Density Plot of Residuals for", model_name), xlab = "Residuals", col = "blue", lwd = 2)
-  curve(dnorm(x, mean = mean(residuals), sd = sd(residuals)), col = "red", lwd = 2, add = TRUE)
-  legend("topright", legend = c("Residuals Density", "Normal Distribution"), col = c("blue", "red"), lwd = c(2, 2))
-  
-  # QQ-Plot of Residuals
-  qqPlot(residuals, main = paste("QQ-Plot of Residuals for", model_name))  # Requires car::qqPlot
-  
-  # Breusch-Pagan test
-  bptest_result <- bptest(model)  # Requires lmtest::bptest
-  plot.new()
-  text(0, 1, paste("Breusch-Pagan Test Result for", model_name), adj = 0, cex = 1.2)
-  bptest_text <- capture.output(bptest_result)
-  text(0, 0.9, paste(bptest_text, collapse = "\n"), adj = 0, cex = 0.7)
-}
-
-# Close the PDF device
-dev.off()
-
-# Show significant results
-View(resultats_table)
-View(resultats_significatifs)
-
-###############
-# Create a Word document for supplementary materials
-doc <- read_docx()
-
-# Add a title for the complete table
-doc <- body_add_par(doc, value = "Results Table (All Models)", style = "heading 1")
-
-# Create a flextable for results_table
-flextable_resultats <- flextable(resultats_table) %>%
-  theme_vanilla() %>%
-  autofit()  
-
-# Add complete table to Word document
-doc <- body_add_flextable(doc, flextable_resultats)
-
-# Add a page break
-doc <- body_add_par(doc, "", style = "Normal")
-doc <- body_add_par(doc, " ", style = "Normal")
-doc <- body_add_par(doc, "Results Table (Significant Models)", style = "heading 1")
-
-# Create a flextable for results_significant
-flextable_significatifs <- flextable(resultats_significatifs) %>%
-  theme_vanilla() %>%
-  autofit()  
-
-# Add the table of significant results to the Word document
-doc <- body_add_flextable(doc, flextable_significatifs)
-
-# Save Word document
-output_file <- "Results_Tables.docx"
-print(doc, target = output_file)
 
 
-###########
-#new selection of variable for test ACP based on KMO value
-
-dataACP1 <- Data[,c("Offspring_number","Offspring_growth_rate","Number_transition","log_Mean_cortisol","Delta_telomere_experiment","Offspring_per_litter","Time_torpor")]
-imputed_data1 <- imputePCA(dataACP1)
-dataimp1<-imputed_data1$completeObs
-dataimp1<-as.data.frame(dataimp1)
-
-# Function to calculate the KMO for a subset of variables
+categories <- list(
+  Reproduction = c("res_Offspring_per_litter", "res_Offspring_growth_rate", "res_Offspring_number"),
+  Hibernation = c( "res_Temperature_torpor","res_Torpor_bout_duration", 
+                   "res_Time_inter_torpor", "res_Time_torpor"),
+  Telomere = c("res_Delta_telomere_experiment", "res_Telomere_pre_hibernation"),
+  Cortisol = c("res_log_Mean_cortisol"),
+  Transition = c("res_Number_transition"),
+  Growth = c("res_Growth_rate")
+)
+# ============================================================
+# === 2. Utility functions ==================================
+# ============================================================
 calculate_kmo <- function(data, vars) {
-  kmo_result <- KMO(data[, vars])
-  return(kmo_result$MSA)  
+  kmo_result <- KMO(data[, vars, drop = FALSE])
+  return(kmo_result$MSA[1])
 }
 
-# Bartlett test function
 test_bartlett <- function(data, vars) {
-  correlation_matrix <- cor(data[, vars])
-  bartlett_test <- cortest.bartlett(correlation_matrix, n = nrow(data))
-  return(bartlett_test$p.value) 
+  corr_mat <- cor(data[, vars, drop = FALSE])
+  if(det(corr_mat) < 1e-10) return(1)
+  bartlett_test <- cortest.bartlett(corr_mat, n = nrow(data))
+  return(bartlett_test$p.value)
 }
 
-# Test all possible variable combinations (from 3 to 6 variables)
-combinations <- unlist(lapply(3:ncol(dataimp1), function(i) combn(names(dataimp1), i, simplify = FALSE)), recursive = FALSE)
-
-# Initialize lists to store results
-kmo_scores <- c()
-valid_combinations <- list()
-
-# Calculate KMO only for combinations with a significant Bartlett test
-for (comb in combinations) {
-  bartlett_pvalue <- test_bartlett(dataimp1, comb)
-  
-  if (bartlett_pvalue < 0.05) {  
-    kmo_value <- calculate_kmo(dataimp1, comb)  
-    kmo_scores <- c(kmo_scores, kmo_value)
-    valid_combinations <- append(valid_combinations, list(comb))
-  }
-}
-
-# Find the combination that gives the best KMO among the valid ones
-if (length(kmo_scores) > 0) {
-  best_combination <- valid_combinations[[which.max(kmo_scores)]]
-  best_kmo <- max(kmo_scores)
-  
-  # Display result 
-  cat("The best combination of variables is :", paste(best_combination, collapse = ", "), "\n")
-  cat("The best KMO score (Overall MSA) is :", best_kmo, "\n")
-} else {
-  cat("No significant combination was found with a Bartlett test.")
-}
-
-##################
-#ACP on selected variable
-
-dataACP2 <- Data[,c("Offspring_growth_rate","Number_transition","Delta_telomere_experiment","Offspring_per_litter","Time_torpor")]
-imputed_data2 <- imputePCA(dataACP2)
-dataimp2<-imputed_data2$completeObs
-nrow(dataimp2)
-R2<-cor(dataimp2)
-cortest.bartlett(R2,n=34)
-KMO(R2)
-dataimp2<-as.data.frame(dataimp2)
-is.data.frame(dataimp2)
-
-#############
-#permutation test
-
-permutation_test_acp <- function(data, n_permutations = 1000) {
-  if (!is.data.frame(data)) stop("The data must be a data.frame.")
-  if (anyNA(data)) stop("The dataset contains missing values.")
-  
-  # Perform PCA on original data
-  res_pca <- PCA(data, scale.unit = TRUE, graph = FALSE)
-  obs_values <- res_pca$eig[, 1]  
-  num_pcs <- length(obs_values)
-  
-  # Initialization to store permutation results
-  permuted_values <- matrix(NA, ncol = num_pcs, nrow = n_permutations)
-  
-  for (i in 1:n_permutations) {
-    permuted_data <- as.data.frame(lapply(data, sample))
-    
-    perm_res <- tryCatch(
-      PCA(permuted_data, scale.unit = TRUE, graph = FALSE),
-      error = function(e) {
-        message(paste("Error during PCA at iteration", i, ":", e$message))
-        return(NULL)
-      }
-    )
-    
-    if (is.null(perm_res) || nrow(perm_res$eig) != num_pcs) next
-    
-    permuted_values[i, ] <- perm_res$eig[, 1]
-  }
-  
-  print("Dimensions of swapped values :")
-  print(dim(permuted_values))
-  print("Length of observed eigenvalues :")
-  print(length(obs_values))
-  
-  # Calculating p-values
-  p_values <- sapply(1:ncol(permuted_values), function(j) {
-    mean(permuted_values[, j] >= obs_values[j], na.rm = TRUE)
+check_categories <- function(vars, categories) {
+  used_cats <- sapply(vars, function(v) {
+    cat_name <- names(Filter(function(x) v %in% x, categories))
+    if(length(cat_name)==0) return(NA)
+    return(cat_name)
   })
-  
-  results <- data.frame(
-    PC = paste0("PC", 1:num_pcs),
-    Observed_Eigenvalue = obs_values,
-    p_value = p_values
-  )
-  
-  return(results)
+  return(length(unique(used_cats)) == length(vars))
 }
 
-# Apply the permutation test function to a dataset
-res_perm <- permutation_test_acp(dataimp2, n_permutations = 1000)
-print(res_perm)
-
-##################
-#evalution of ACP 
-
-res.PCA<-PCA(dataimp2, graph = TRUE)
-eig.val <- get_eigenvalue(res.PCA)
-eig.val
-# Extract variable contributions for each axis
-contributions <- res.PCA$var$contrib
-print(contributions)
-
-#extract the first component and test effect of sex, littersize and Birth
-Data$ACPall<-res.PCA$ind$coord[,1]
-test1<-lme(ACPall ~Littersize*Sex+Birth*Sex, random=~1|Mother,method="ML", na.action = "na.fail", data=Data)
-summary(model.avg(dredge(test1, fixed=~+(1|Mother),rank="AICc",m.lim = c(NA,4)),delta<5))
-test1<-lme(ACPall ~Littersize*Sex, random=~1|Mother,method="ML", na.action = "na.fail", data=Data)
-summary(test1)
-
-#validation
-residuals <- resid(test1)
-#density
-plot(density(residuals), main = paste("Density Plot of Residuals for", model_name), xlab = "Residuals", col = "blue", lwd = 2)
-curve(dnorm(x, mean = mean(residuals), sd = sd(residuals)), col = "red", lwd = 2, add = TRUE)
-legend("topright", legend = c("Residuals Density", "Normal Distribution"), col = c("blue", "red"), lwd = c(2, 2))
-
-# QQ-Plot of Residuals
-qqPlot(residuals, main = paste("QQ-Plot of Residuals for", model_name))  # Requires car::qqPlot
-
-# Breusch-Pagan test
-bptest(test1)
-
-# Calculate R?
-r2_results <- r2(test1)
-print(r2_results)
-
-#plot
-ggplot(Data, aes(x = ACPall, y = Littersize, color = Sex)) +
-  geom_point(size = 3) +
-  geom_smooth(method = "lm", aes(group = Sex, color = Sex), se = FALSE, linetype = "solid") +
-  theme_classic() +
-  labs(x = "PC1", y = "Litter size")
-
-######################
-###Test only on female
-
-# Variables
-variables <- c("Growth_rate", 
-               "Delta_telomere_experiment", "Telomere_pre_hibernation", 
-               "Temperature_torpor", 
-               "log_Mean_cortisol", "Torpor_bout_duration", 
-               "Time_inter_torpor","Time_torpor", "Offspring_per_litter", 
-               "Offspring_growth_rate", "Offspring_number","Number_transition")
-
-# Results table
-resultats_table <- data.frame(
-  Model_Number = integer(),
-  N_data = integer(),
-  Dependent_Variable = character(),
-  Variables = character(),
-  Estimate = numeric(),
-  Std_Error = numeric(),
-  p_value = numeric(),
-  Significance = character(),
-  Adjusted_p_value = numeric(),
-  Adjusted_Significance = character(),
-  stringsAsFactors = FALSE
+# ============================================================
+# === 3. Generate all valid combinations ====================
+# ============================================================
+vars_to_check <- intersect(variables, names(Data))
+combinations <- unlist(
+  lapply(2:length(vars_to_check), function(i) combn(vars_to_check, i, simplify=FALSE)),
+  recursive=FALSE
 )
 
-# Initialize a global counter for model numbers
-model_counter <- 0
+valid_combinations <- Filter(function(x) check_categories(x, categories), combinations)
 
-# Create a list to store models
-model_list <- list()
-
-# Test all variable pairs
-for (var1 in variables) {
-  for (var2 in variables) {
-    # Avoid testing a variable against itself
-    if (var1 != var2) {
-      
-      # Identify necessary columns
-      colonnes_utiles <- c(var1, var2, "Mother")
-      
-      # Filter data to exclude NA in useful columns
-      DataF<-subset(Data,Data$Sex=="F")
-      Data_filtered <- na.omit(DataF[, colonnes_utiles])
-      
-      if (nrow(Data_filtered) == 0) {
-        next
-      }
-      
-      # Define the model with lme for each pair of variables
-      formule <- as.formula(paste(var1, "~", var2))
-      model <- lme(formule, random = ~1 | Mother, method = "ML", na.action = "na.fail", data = Data_filtered)
-      
-      # Increment model counter
-      model_counter <- model_counter + 1
-      
-      # Save the model to the list
-      model_list[[paste0("Model_", model_counter)]] <- model
-      
-      # Extract information on coefficients
-      model_summary <- summary(model)
-      coef_table <- as.data.frame(model_summary$tTable)
-      for (i in 1:nrow(coef_table)) {
-        coef_info <- coef_table[i, ]
-        n_data <- nrow(Data_filtered)
-        
-        var_name <- rownames(coef_table)[i]  
-        estimate <- as.numeric(coef_info["Value"])
-        std_error <- as.numeric(coef_info["Std.Error"])
-        Pr_z <- as.numeric(coef_info["p-value"])
-        
-        # Determine significance level
-        if (Pr_z < 0.001) {
-          significance <- "***"
-        } else if (Pr_z < 0.01) {
-          significance <- "**"
-        } else if (Pr_z < 0.05) {
-          significance <- "*"
-        } else {
-          significance <- "ns"  
-        }
-        
-        # Add information to the results table
-        resultats_table <- rbind(resultats_table, data.frame(
-          Model_Number = model_counter,  
-          N_data = n_data,
-          Dependent_Variable = var1,
-          Variables = var_name,
-          Estimate = format(round(estimate, 4), nsmall = 3, scientific = FALSE),
-          Std_Error = format(round(std_error, 4), nsmall = 3, scientific = FALSE),
-          p_value = format(round(Pr_z, 4), nsmall = 3, scientific = FALSE),
-          Significance = significance  
-        ))
-      }
-    }
-  }
-}
-
-# Filter models with at least one significant variable other than the intercept
-resultats_significatifs <- resultats_table %>%
-  group_by(Model_Number) %>%
-  filter(any(Significance %in% c("*", "**", "***") & Variables != "(Intercept)"))
-
-# Generate a PDF file for diagnostics
-pdf("Model_Diagnostics.pdf", width = 8, height = 10)
-
-# Apply diagnostics tests to all models
-for (model_name in names(model_list)) {
-  model <- model_list[[model_name]]
-  
-  # Add a title page for each model
-  plot.new()
-  title(main = paste("Diagnostics for", model_name))
-  
-  # Model summary
-  plot.new()
-  text(0, 1, paste("Model Summary for", model_name), adj = 0, cex = 1.2)
-  model_summary <- capture.output(summary(model))
-  text(0, 0.9, paste(model_summary, collapse = "\n"), adj = 0, cex = 0.7)
-  
-  # Density Plot of Residuals with Normal Curve Overlay
-  residuals <- resid(model)
-  plot(density(residuals), main = paste("Density Plot of Residuals for", model_name), xlab = "Residuals", col = "blue", lwd = 2)
-  curve(dnorm(x, mean = mean(residuals), sd = sd(residuals)), col = "red", lwd = 2, add = TRUE)
-  legend("topright", legend = c("Residuals Density", "Normal Distribution"), col = c("blue", "red"), lwd = c(2, 2))
-  
-  # QQ-Plot of Residuals
-  qqPlot(residuals, main = paste("QQ-Plot of Residuals for", model_name))  # Requires car::qqPlot
-  
-  # Breusch-Pagan test
-  bptest_result <- bptest(model)  # Requires lmtest::bptest
-  plot.new()
-  text(0, 1, paste("Breusch-Pagan Test Result for", model_name), adj = 0, cex = 1.2)
-  bptest_text <- capture.output(bptest_result)
-  text(0, 0.9, paste(bptest_text, collapse = "\n"), adj = 0, cex = 0.7)
-}
-
-# Close the PDF device
-dev.off()
-
-# Show significant results
-View(resultats_table)
-View(resultats_significatifs)
-
-###############
-# Create a Word document for supplementary materials
-doc <- read_docx()
-
-# Add a title for the complete table
-doc <- body_add_par(doc, value = "Results Table (All Models)", style = "heading 1")
-
-# Create a flextable for results_table
-flextable_resultats <- flextable(resultats_table) %>%
-  theme_vanilla() %>%
-  autofit()  
-
-# Add complete table to Word document
-doc <- body_add_flextable(doc, flextable_resultats)
-
-# Add a page break
-doc <- body_add_par(doc, "", style = "Normal")
-doc <- body_add_par(doc, " ", style = "Normal")
-doc <- body_add_par(doc, "Results Table (Significant Models)", style = "heading 1")
-
-# Create a flextable for results_significant
-flextable_significatifs <- flextable(resultats_significatifs) %>%
-  theme_vanilla() %>%
-  autofit()  
-
-# Add the table of significant results to the Word document
-doc <- body_add_flextable(doc, flextable_significatifs)
-
-# Save Word document
-output_file <- "Results_Tables.docx"
-print(doc, target = output_file)
-
-##########################
-#new variable selection based on KMO 
-dataACPF1 <- DataF[,c("log_Mean_cortisol","Delta_telomere_experiment","Offspring_per_litter","Number_transition","Growth_rate","Offspring_number","Time_inter_torpor","Offspring_growth_rate")]
-imputed_dataF1 <- imputePCA(dataACPF1)
-dataimpF1<-imputed_dataF1$completeObs
-dataimpF1<-as.data.frame(dataimpF1)
-dataimpF1
-
-# Function to calculate the KMO for a subset of variables
-calculate_kmo <- function(data, vars) {
-  kmo_result <- KMO(data[, vars])
-  return(kmo_result$MSA)  
-}
-
-# Bartlett test function
-test_bartlett <- function(data, vars) {
-  correlation_matrix <- cor(data[, vars])
-  bartlett_test <- cortest.bartlett(correlation_matrix, n = nrow(data))
-  return(bartlett_test$p.value) 
-}
-
-# Test all possible variable combinations (from 3 to 6 variables)
-combinations <- unlist(lapply(3:ncol(dataimpF1), function(i) combn(names(dataimpF1), i, simplify = FALSE)), recursive = FALSE)
-
-# Initialize lists to store results
 kmo_scores <- c()
-valid_combinations <- list()
+valid_sets  <- list()
 
-# Calculate KMO only for combinations with a significant Bartlett test
-for (comb in combinations) {
-  bartlett_pvalue <- test_bartlett(dataimpF1, comb)
+# ============================================================
+# === 4. Optimize variable selection (KMO + Bartlett) =======
+# ============================================================
+for (comb in valid_combinations) {
+  subset <- na.omit(Data[, comb, drop=FALSE])
   
-  if (bartlett_pvalue < 0.05) {  
-    kmo_value <- calculate_kmo(dataimpF1, comb)  
-    kmo_scores <- c(kmo_scores, kmo_value)
-    valid_combinations <- append(valid_combinations, list(comb))
+  bartlett_p <- tryCatch(test_bartlett(subset, comb), error=function(e) NA)
+  if(is.na(bartlett_p) || bartlett_p >= 0.05) next
+  
+  kmo_val <- tryCatch(calculate_kmo(subset, comb), error=function(e) NA)
+  if(!is.na(kmo_val)) {
+    kmo_scores <- c(kmo_scores, kmo_val)
+    valid_sets <- append(valid_sets, list(comb))
   }
 }
 
-# Find the combination that gives the best KMO among the valid ones
-if (length(kmo_scores) > 0) {
-  best_combination <- valid_combinations[[which.max(kmo_scores)]]
+# ============================================================
+# === 5. Identify best combination ==========================
+# ============================================================
+if(length(kmo_scores) > 0) {
+  best_index <- which.max(kmo_scores)
+  best_combination <- valid_sets[[best_index]]
   best_kmo <- max(kmo_scores)
   
-  # Display result 
-  cat("The best combination of variables is :", paste(best_combination, collapse = ", "), "\n")
-  cat("The best KMO score (Overall MSA) is :", best_kmo, "\n")
+  cat("✅ Best variable combination:", paste(best_combination, collapse=", "), "\n")
+  cat("✅ Best KMO score:", round(best_kmo,4), "\n")
 } else {
-  cat("No significant combination was found with a Bartlett test.")
+  stop("No valid combination according to Bartlett’s test.")
 }
 
-#ACP test on selected variable
+# ============================================================
+# === 6 PC1 extraction =================
+# ============================================================
+vars_pca <- best_combination
+data_pca <- na.omit(Data[, vars_pca, drop=FALSE])
+data_scaled <- scale(data_pca)
 
-dataACPF2 <- DataF[,c("Offspring_per_litter","Number_transition","Growth_rate","Offspring_growth_rate")]
-imputed_dataF2 <- imputePCA(dataACPF2)
-dataimpF2<-imputed_dataF2$completeObs
-nrow(dataimpF2)
-R2<-cor(dataimpF2)
-cortest.bartlett(R2,n=16)
-KMO(R2)
+res_pca <- PCA(data_scaled, scale.unit=FALSE, ncp=2, graph=FALSE)
+Data$Syndrome_PC1 <- NA
+Data[rownames(data_pca), "Syndrome_PC1"] <- res_pca$ind$coord[,1]
+res_pca_syndrome$var$coord
+rownames(res_pca_syndrome$var$coord) <- c("Growth rate", "Offspring growth rate", "Number of transitions") 
 
-#Evoluation of PCA
-res.PCAF1<-PCA(dataimpF2, graph = TRUE)
-eig.val <- get_eigenvalue(res.PCAF1)
-eig.val
-
-# Extraire les contributions des variables pour chaque axe
-contributions <- res.PCA1$var$contrib
-print(contributions)
-
-#permutation test
-permutation_test_acp <- function(data, n_permutations = 1000) {
-  if (!is.data.frame(data)) stop("Les données doivent être un data.frame.")
-  if (anyNA(data)) stop("Le jeu de données contient des valeurs manquantes.")
-  
-  # Réaliser l'ACP sur les données originales
-  res_pca <- PCA(data, scale.unit = TRUE, graph = FALSE)
-  obs_values <- res_pca$eig[, 1]  # Valeurs propres observées
-  num_pcs <- length(obs_values)
-  
-  # Initialisation pour stocker les résultats des permutations
-  permuted_values <- matrix(NA, ncol = num_pcs, nrow = n_permutations)
-  
-  for (i in 1:n_permutations) {
-    permuted_data <- as.data.frame(lapply(data, sample))
-    
-    perm_res <- tryCatch(
-      PCA(permuted_data, scale.unit = TRUE, graph = FALSE),
-      error = function(e) {
-        message(paste("Erreur lors de l'ACP à l'itération", i, ":", e$message))
-        return(NULL)
-      }
-    )
-    
-    if (is.null(perm_res) || nrow(perm_res$eig) != num_pcs) next
-    
-    permuted_values[i, ] <- perm_res$eig[, 1]
-  }
-  
-  print("Dimensions des valeurs permutées :")
-  print(dim(permuted_values))
-  print("Longueur des valeurs propres observées :")
-  print(length(obs_values))
-  
-  # Calcul des p-valeurs
-  p_values <- sapply(1:ncol(permuted_values), function(j) {
-    mean(permuted_values[, j] >= obs_values[j], na.rm = TRUE)
-  })
-  
-  results <- data.frame(
-    PC = paste0("PC", 1:num_pcs),
-    Observed_Eigenvalue = obs_values,
-    p_value = p_values
+fviz_pca_var(
+   res_pca_syndrome, 
+  axes = c(1, 2),
+  col.var = "red",
+  repel = TRUE,
+  arrowsize = 1.2,        
+  labelsize = 6,          
+  title = "Biplot PCA: variables only",
+  circle = TRUE
+) + 
+  coord_equal() +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid = element_line(color = "grey90"),
+    axis.title = element_text(size = 14, face = "bold"),
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    plot.margin = margin(10, 10, 10, 10)
   )
-  
-  return(results)
+
+
+# ============================================================
+# === 7. PCA robustness check via permutation test ==========
+# ============================================================
+n_perm <- 500
+n_pc <- 2
+perm_var <- matrix(NA, nrow=n_perm, ncol=n_pc)
+var_obs <- res_pca$eig[1:n_pc,2]
+
+for(p in 1:n_perm) {
+  perm_data <- apply(data_scaled, 2, sample)
+  res_perm <- tryCatch(PCA(perm_data, scale.unit=FALSE, ncp=n_pc, graph=FALSE), error=function(e) NULL)
+  if(!is.null(res_perm)) perm_var[p,] <- res_perm$eig[1:n_pc,2]
 }
 
+p_values <- sapply(1:n_pc, function(k) mean(perm_var[,k] >= var_obs[k], na.rm=TRUE))
 
-# Apply the permutation test function to a dataset
-dataimpF2<-as.data.frame(dataimpF2)
-is.data.frame(dataimpF2)
-res_permF <- permutation_test_acp(dataimpF2, n_permutations = 1000)
-print(res_permF)
+for(k in 1:n_pc) {
+  cat(sprintf("PC%d: Observed variance = %.2f%%, Permutation p-value = %.3f\n", k, var_obs[k], p_values[k]))
+}
 
-#test the effect of littersize, sex and birth on principal component
-DataF$ACPF<-res.PCAF1$ind$coord[,1]
-test1F<-lme(ACPF ~Littersize+Birth, random=~1|Mother,method="ML", na.action = "na.fail", data=DataF)
-summary(model.avg(dredge(test1F, fixed=~+(1|Mother),rank="AICc",m.lim = c(NA,4)),delta<5))
-test1F<-lme(ACPF ~Littersize, random=~1|Mother,method="ML", na.action = "na.fail", data=DataF)
-summary(test1F)
+# ============================================================
+# === 8. LME for PC1 ~ Littersize, Birth, Sex =============
+# ============================================================
+Datana <- na.omit(Data[, c("Syndrome_PC1","Littersize","Birth","Mother","Sex")])
 
-#validation
-residuals <- resid(test1F)
-#density
-plot(density(residuals), main = paste("Density Plot of Residuals for", model_name), xlab = "Residuals", col = "blue", lwd = 2)
+model_full <- lme(Syndrome_PC1 ~ Littersize * Sex + Birth * Sex,
+                  random = ~1 | Mother, data=Datana, method="ML")
+
+# Model selection using dredge (AICc)
+model_selection <- dredge(model_full, fixed = ~ +(1|Mother), rank="AICc", m.lim=c(NA,4))
+summary(model.avg(model_selection, delta<5))
+
+# Simplified model
+model_simple <- lme(Syndrome_PC1 ~ Littersize * Sex,
+                    random = ~1 | Mother, data=Datana, method="ML")
+summary(model_simple)
+
+# ============================================================
+# === 9. Model diagnostics ===================================
+# ============================================================
+residuals <- resid(model_simple)
+plot(density(residuals), main="Residual Density", xlab="Residuals")
+curve(dnorm(x, mean=mean(residuals), sd=sd(residuals)), col="red", lwd=2, add=TRUE)
+bptest(model_simple)
+performance::r2(model_simple)
+
+# ============================================================
+# === 10. Visualization =====================================
+# ============================================================
+ggplot(Datana, aes(x=Littersize, y=Syndrome_PC1, color=Sex)) +
+  geom_point(size=3, alpha=0.8) +
+  geom_smooth(method="lm", se=TRUE, aes(fill=Sex)) +
+  scale_color_manual(values=c("F"="#E41A1C", "M"="#377EB8")) +
+  scale_fill_manual(values=c("F"="#E41A1C", "M"="#377EB8")) +
+  theme_classic(base_size=14) +
+  labs(x="Litter size", y="Syndrome PC1", color="Sex", fill="Sex") +
+  theme(legend.position="top")
+
+
+
+# ============================================================
+# === Female-only PCA and LME =================================
+# ============================================================
+DataF <- subset(Data, Sex == "F")
+variables_F <- c("Growth_rate", "Delta_telomere_experiment", "Telomere_pre_hibernation",
+               "Temperature_torpor", "Torpor_bout_duration", "Time_inter_torpor", "Time_torpor",
+               "log_Mean_cortisol", "Offspring_per_litter", "Offspring_growth_rate",
+               "Offspring_number", "Number_transition")
+
+categories_F <- list(
+  Reproduction = c("Offspring_per_litter", "Offspring_growth_rate", "Offspring_number"),
+  Hibernation = c("Temperature_torpor","Torpor_bout_duration","Time_inter_torpor","Time_torpor"),
+  Telomere = c("Delta_telomere_experiment","Telomere_pre_hibernation"),
+  Cortisol = c("log_Mean_cortisol"),
+  Transition = c("Number_transition"),
+  Growth = c("Growth_rate")
+)
+# Generate all valid combinations
+vars_to_check <- intersect(variables_F, names(DataF))
+combinations <- unlist(
+  lapply(2:length(vars_to_check), function(i) combn(vars_to_check, i, simplify = FALSE)),
+  recursive = FALSE
+)
+valid_combinations <- Filter(function(x) check_categories(x, categories_F), combinations)
+
+kmo_scores <- c()
+best_sets <- list()
+
+for (comb in valid_combinations) {
+  subset <- na.omit(DataF[, comb, drop=FALSE])
+  bartlett_p <- tryCatch(test_bartlett(subset, comb), error=function(e) NA)
+  if (is.na(bartlett_p) || bartlett_p >= 0.05) next
+  kmo_val <- tryCatch(calculate_kmo(subset, comb), error=function(e) NA)
+  if (!is.na(kmo_val)) {
+    kmo_scores <- c(kmo_scores, kmo_val)
+    best_sets <- append(best_sets, list(comb))
+  }
+}
+
+# Select best combination
+best_index <- which.max(kmo_scores)
+best_combination <- best_sets[[best_index]]
+best_kmo <- max(kmo_scores)
+
+cat("✅ Female best variables:", paste(best_combination, collapse=", "), "\n")
+cat("✅ KMO:", round(best_kmo,4), "\n")
+
+# PCA 
+data_pc1 <- na.omit(DataF[, best_combination, drop=FALSE])
+data_scaled <- scale(data_pc1)
+res_pcaF <- PCA(data_scaled, scale.unit=FALSE, ncp=2, graph=FALSE)
+DataF$Syndrome_PC1 <- NA
+DataF[rownames(data_pc1), "Syndrome_PC1"] <- res_pcaF$ind$coord[,1]
+
+res_pcaF$var$coord
+rownames(res_pcaF$var$coord) <- c("Growth rate", "Offspring growth rate", "Number of transitions") 
+fviz_pca_var(
+  res_pcaF, 
+  axes = c(1, 2),
+  col.var = "red",
+  repel = TRUE,
+  arrowsize = 1.2,        
+  labelsize = 6,          
+  title = "Biplot PCA: variables only",
+  circle = TRUE
+) + 
+  coord_equal() +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid = element_line(color = "grey90"),
+    axis.title = element_text(size = 14, face = "bold"),
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    plot.margin = margin(10, 10, 10, 10)
+  )
+
+
+
+# Permutation test
+n_perm <- 500
+n_pc <- 2
+perm_var <- matrix(NA, nrow=n_perm, ncol=n_pc)
+var_obs <- res_pcaF$eig[1:n_pc,2]
+
+for (p in 1:n_perm) {
+  perm_data <- apply(data_scaled, 2, sample)
+  res_perm <- tryCatch(PCA(perm_data, scale.unit=FALSE, ncp=n_pc, graph=FALSE), error=function(e) NULL)
+  if(!is.null(res_perm)) perm_var[p,] <- res_perm$eig[1:n_pc,2]
+}
+
+p_values <- sapply(1:n_pc, function(k) mean(perm_var[,k] >= var_obs[k], na.rm=TRUE))
+for(k in 1:n_pc) cat(sprintf("Female PC%d: Observed variance = %.2f%%, Perm p = %.3f\n", k, var_obs[k], p_values[k]))
+
+# LME for females
+DataFna_model <- na.omit(DataF[, c("Syndrome_PC1", "Littersize", "Birth", "Mother")])
+
+# Full model
+model_full <- lme(Syndrome_PC1 ~ Littersize + Birth, random = ~1|Mother, method="ML", data=DataFna_model)
+
+# Optional: model selection
+summary(model.avg(dredge(model_full, fixed=~+(1|Mother), rank="AICc", m.lim=c(NA,4)), delta<5))
+
+# Simple model
+model_simple <- lme(Syndrome_PC1 ~ Littersize, random=~1|Mother, method="ML", data=DataFna_model)
+summary(model_simple)
+
+#Model diagnostics ---
+
+# Extract residuals
+residuals <- resid(model_simple)
+
+# Check residual normality
+plot(density(residuals), main = "Residual Density", xlab = "Residuals")
 curve(dnorm(x, mean = mean(residuals), sd = sd(residuals)), col = "red", lwd = 2, add = TRUE)
-legend("topright", legend = c("Residuals Density", "Normal Distribution"), col = c("blue", "red"), lwd = c(2, 2))
 
-# QQ-Plot of Residuals
-qqPlot(residuals, main = paste("QQ-Plot of Residuals for", model_name))  # Requires car::qqPlot
+# Test homoscedasticity
+bptest(model_simple)
 
-# Breusch-Pagan test
-bptest(test1F)
-
-# Calculate R?
-r2_results <- r2(test1F)
-print(r2_results)
-
-#plot
-ggplot(DataF, aes(x = ACPF, y = Littersize)) +
-  geom_point(size = 3) +
-  theme_classic() +
-  labs(x = "PC1F", y = "Litter size")
+# Compute R²
+performance::r2(model_simple)
 
 
-##################
-###Test only on male
+# --------------------------------------
+# 9. Visualization
+# --------------------------------------
+
+ggplot(DataFna_model, aes(x = Syndrome_PC1, y = Littersize)) +
+  geom_jitter(width = 0.05, height = 0.05, size = 4, alpha = 0.6, color = "steelblue") +  # jitter
+  geom_smooth(method = "lm", se = TRUE, color = "darkred", size = 1.2) +
+  theme_minimal(base_size = 14) +
+  labs(
+    x = "PC1F",
+    y = "Litter size",
+    title = "Relationship between PC1 and Litter Size"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    axis.title = element_text(face = "bold"),
+    panel.grid.major = element_line(color = "grey90"),
+    panel.grid.minor = element_blank()
+  )
 
 
-variables <- c("Growth_rate", 
-               "Delta_telomere_experiment", "Telomere_pre_hibernation", 
-               "Temperature_torpor", 
-               "log_Mean_cortisol", "Torpor_bout_duration", 
-               "Time_inter_torpor","Time_torpor", "Offspring_per_litter", 
-               "Offspring_growth_rate", "Offspring_number","Number_transition","Testosterone_post_hibernation")
+DataFna_model
+# ============================================================
+# === Male-only PCA and LME ==================================
+# ============================================================
+DataM <- subset(Data, Sex == "M")
 
-# Results table
-resultats_table <- data.frame(
-  Model_Number = integer(),
-  N_data = integer(),
-  Dependent_Variable = character(),
-  Variables = character(),
-  Estimate = numeric(),
-  Std_Error = numeric(),
-  p_value = numeric(),
-  Significance = character(),
-  Adjusted_p_value = numeric(),
-  Adjusted_Significance = character(),
-  stringsAsFactors = FALSE
+
+# Variables of interest
+variables_M <- c(
+  "Growth_rate", "Delta_telomere_experiment", "Telomere_pre_hibernation",
+  "Temperature_torpor", "log_Mean_cortisol", "Torpor_bout_duration",
+  "Time_inter_torpor", "Time_torpor", "Offspring_per_litter",
+  "Offspring_growth_rate", "Offspring_number", "Number_transition",
+  "Testosterone_post_hibernation"
 )
 
-# Initialize a global counter for model numbers
-model_counter <- 0
+# Conceptual categories
+categories_M <- list(
+  Reproduction = c("Offspring_per_litter", "Offspring_growth_rate", "Offspring_number", "Testosterone_post_hibernation"),
+  Hibernation  = c("Time_torpor", "Torpor_bout_duration", "Time_inter_torpor", "Temperature_torpor"),
+  Telomere     = c("Delta_telomere_experiment", "Telomere_pre_hibernation"),
+  Cortisol     = c("log_Mean_cortisol"),
+  Transition   = c("Number_transition"),
+  Growth       = c("Growth_rate")
+)
 
-# Create a list to store models
-model_list <- list()
 
-# Test all variable pairs
-for (var1 in variables) {
-  for (var2 in variables) {
-    # Avoid testing a variable against itself
-    if (var1 != var2) {
-      
-      # Identify necessary columns
-      colonnes_utiles <- c(var1, var2, "Mother")
-      
-      # Filter data to exclude NA in useful columns
-      DataM<-subset(Data,Data$Sex=="M")
-      Data_filtered <- na.omit(DataM[, colonnes_utiles])
-      
-      if (nrow(Data_filtered) == 0) {
-        next
-      }
-      
-      # Define the model with lme for each pair of variables
-      formule <- as.formula(paste(var1, "~", var2))
-      model <- lme(formule, random = ~1 | Mother, method = "ML", na.action = "na.fail", data = Data_filtered)
-      
-      # Increment model counter
-      model_counter <- model_counter + 1
-      
-      # Save the model to the list
-      model_list[[paste0("Model_", model_counter)]] <- model
-      
-      # Extract information on coefficients
-      model_summary <- summary(model)
-      coef_table <- as.data.frame(model_summary$tTable)
-      for (i in 1:nrow(coef_table)) {
-        coef_info <- coef_table[i, ]
-        n_data <- nrow(Data_filtered)
-        
-        var_name <- rownames(coef_table)[i]  
-        estimate <- as.numeric(coef_info["Value"])
-        std_error <- as.numeric(coef_info["Std.Error"])
-        Pr_z <- as.numeric(coef_info["p-value"])
-        
-        # Determine significance level
-        if (Pr_z < 0.001) {
-          significance <- "***"
-        } else if (Pr_z < 0.01) {
-          significance <- "**"
-        } else if (Pr_z < 0.05) {
-          significance <- "*"
-        } else {
-          significance <- "ns"  
-        }
-        
-        # Add information to the results table
-        resultats_table <- rbind(resultats_table, data.frame(
-          Model_Number = model_counter,  
-          N_data = n_data,
-          Dependent_Variable = var1,
-          Variables = var_name,
-          Estimate = format(round(estimate, 4), nsmall = 3, scientific = FALSE),
-          Std_Error = format(round(std_error, 4), nsmall = 3, scientific = FALSE),
-          p_value = format(round(Pr_z, 4), nsmall = 3, scientific = FALSE),
-          Significance = significance  
-        ))
-      }
-    }
-  }
-}
+# Generate all valid combinations (2–3 variables, at least 1 Reproduction)
+has_reproduction <- function(vars, categories) any(vars %in% categories$Reproduction)
+vars_to_check <- intersect(variables_M, names(DataM))
+combinations <- unlist(lapply(2:3, function(i) combn(vars_to_check, i, simplify=FALSE)), recursive=FALSE)
+valid_combinations <- Filter(function(x) check_categories(x, categories_M) && has_reproduction(x, categories_M), combinations)
 
-# Filter models with at least one significant variable other than the intercept
-resultats_significatifs <- resultats_table %>%
-  group_by(Model_Number) %>%
-  filter(any(Significance %in% c("*", "**", "***") & Variables != "(Intercept)"))
-
-# Generate a PDF file for diagnostics
-pdf("Model_Diagnostics.pdf", width = 8, height = 10)
-
-# Apply diagnostics tests to all models
-for (model_name in names(model_list)) {
-  model <- model_list[[model_name]]
-  
-  # Add a title page for each model
-  plot.new()
-  title(main = paste("Diagnostics for", model_name))
-  
-  # Model summary
-  plot.new()
-  text(0, 1, paste("Model Summary for", model_name), adj = 0, cex = 1.2)
-  model_summary <- capture.output(summary(model))
-  text(0, 0.9, paste(model_summary, collapse = "\n"), adj = 0, cex = 0.7)
-  
-  # Density Plot of Residuals with Normal Curve Overlay
-  residuals <- resid(model)
-  plot(density(residuals), main = paste("Density Plot of Residuals for", model_name), xlab = "Residuals", col = "blue", lwd = 2)
-  curve(dnorm(x, mean = mean(residuals), sd = sd(residuals)), col = "red", lwd = 2, add = TRUE)
-  legend("topright", legend = c("Residuals Density", "Normal Distribution"), col = c("blue", "red"), lwd = c(2, 2))
-  
-  # QQ-Plot of Residuals
-  qqPlot(residuals, main = paste("QQ-Plot of Residuals for", model_name))  # Requires car::qqPlot
-  
-  # Breusch-Pagan test
-  bptest_result <- bptest(model)  # Requires lmtest::bptest
-  plot.new()
-  text(0, 1, paste("Breusch-Pagan Test Result for", model_name), adj = 0, cex = 1.2)
-  bptest_text <- capture.output(bptest_result)
-  text(0, 0.9, paste(bptest_text, collapse = "\n"), adj = 0, cex = 0.7)
-}
-
-# Close the PDF device
-dev.off()
-
-# Show significant results
-View(resultats_table)
-View(resultats_significatifs)
-
-###############
-# Create a Word document for supplementary materials
-doc <- read_docx()
-
-# Add a title for the complete table
-doc <- body_add_par(doc, value = "Results Table (All Models)", style = "heading 1")
-
-# Create a flextable for results_table
-flextable_resultats <- flextable(resultats_table) %>%
-  theme_vanilla() %>%
-  autofit()  
-
-# Add complete table to Word document
-doc <- body_add_flextable(doc, flextable_resultats)
-
-# Add a page break
-doc <- body_add_par(doc, "", style = "Normal")
-doc <- body_add_par(doc, " ", style = "Normal")
-doc <- body_add_par(doc, "Results Table (Significant Models)", style = "heading 1")
-
-# Create a flextable for results_significant
-flextable_significatifs <- flextable(resultats_significatifs) %>%
-  theme_vanilla() %>%
-  autofit()  
-
-# Add the table of significant results to the Word document
-doc <- body_add_flextable(doc, flextable_significatifs)
-
-# Save Word document
-output_file <- "Results_Tables.docx"
-print(doc, target = output_file)
-
-##########
-#new variable selection based on KMO
-
-dataACPM1 <- DataM[,c("Number_transition","Delta_telomere_experiment","Growth_rate","Telomere_pre_hibernation")]
-imputed_dataM1 <- imputePCA(dataACPM1)
-dataimpM1<-imputed_dataM1$completeObs
-dataimpM1<-as.data.frame(dataACPM1)
-dataimpM1
-
-# Function to calculate the KMO for a subset of variables
-calculate_kmo <- function(data, vars) {
-  kmo_result <- KMO(data[, vars])
-  return(kmo_result$MSA)  
-}
-
-# Bartlett test function
-test_bartlett <- function(data, vars) {
-  correlation_matrix <- cor(data[, vars])
-  bartlett_test <- cortest.bartlett(correlation_matrix, n = nrow(data))
-  return(bartlett_test$p.value) 
-}
-
-# Test all possible variable combinations (from 3 to 6 variables)
-combinations <- unlist(lapply(3:ncol(dataimpM1), function(i) combn(names(dataimpM1), i, simplify = FALSE)), recursive = FALSE)
-
-# Initialize lists to store results
 kmo_scores <- c()
-valid_combinations <- list()
-
-# Calculate KMO only for combinations with a significant Bartlett test
-for (comb in combinations) {
-  bartlett_pvalue <- test_bartlett(dataimpM1, comb)
-  
-  if (bartlett_pvalue < 0.05) {  
-    kmo_value <- calculate_kmo(dataimpM1, comb)  
-    kmo_scores <- c(kmo_scores, kmo_value)
-    valid_combinations <- append(valid_combinations, list(comb))
+best_sets <- list()
+for(comb in valid_combinations) {
+  subset <- na.omit(DataM[, comb, drop=FALSE])
+  if(nrow(subset) < 10 || ncol(subset) < 2) next
+  bartlett_p <- tryCatch(test_bartlett(subset, comb), error=function(e) NA)
+  if(is.na(bartlett_p) || bartlett_p >= 0.05) next
+  kmo_val <- tryCatch(calculate_kmo(subset, comb), error=function(e) NA)
+  if(!is.na(kmo_val)) {
+    kmo_scores <- c(kmo_scores, kmo_val)
+    best_sets <- append(best_sets, list(comb))
   }
 }
 
-# Find the combination that gives the best KMO among the valid ones
-if (length(kmo_scores) > 0) {
-  best_combination <- valid_combinations[[which.max(kmo_scores)]]
+best_index <- which.max(kmo_scores)
+best_combination <- best_sets[[best_index]]
+best_kmo <- max(kmo_scores)
+cat("✅ Male best variables:", paste(best_combination, collapse=", "), "\n")
+cat("✅ KMO:", round(best_kmo,4), "\n")
+
+# PCA 
+data_pc1 <- na.omit(DataM[, best_combination, drop=FALSE])
+data_scaled <- scale(data_pc1)
+res_pcaM <- PCA(data_scaled, scale.unit=FALSE, ncp=2, graph=FALSE)
+DataM$Syndrome_PC1 <- NA
+DataM[rownames(data_pc1), "Syndrome_PC1"] <- res_pcaM$ind$coord[,1]
+res_pcaM$var$coord
+rownames(res_pcaM$var$coord) <- c("Telomere length variation", "log(Mean cortisol)", "Offspring growth rate") 
+fviz_pca_var(
+  res_pcaM, 
+  axes = c(1, 2),
+  col.var = "red",
+  repel = TRUE,
+  arrowsize = 1.2,        
+  labelsize = 6,          
+  title = "Biplot PCA: variables only",
+  circle = TRUE
+) + 
+  coord_equal() +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid = element_line(color = "grey90"),
+    axis.title = element_text(size = 14, face = "bold"),
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    plot.margin = margin(10, 10, 10, 10)
+  )
+
+
+# Permutation test
+perm_var <- matrix(NA, nrow=n_perm, ncol=n_pc)
+var_obs <- res_pcaM$eig[1:n_pc,2]
+for(p in 1:n_perm) {
+  perm_data <- apply(data_scaled, 2, sample)
+  res_perm <- tryCatch(PCA(perm_data, scale.unit=FALSE, ncp=n_pc, graph=FALSE), error=function(e) NULL)
+  if(!is.null(res_perm)) perm_var[p,] <- res_perm$eig[1:n_pc,2]
+}
+p_values <- sapply(1:n_pc, function(k) mean(perm_var[,k] >= var_obs[k], na.rm=TRUE))
+for(k in 1:n_pc) cat(sprintf("Male PC%d: Observed variance = %.2f%%, Perm p = %.3f\n", k, var_obs[k], p_values[k]))
+
+#No PCA valide for males
+
+
+
+# ============================================================
+# ============================================================
+# ============================================================
+# === Same test with hibernation pattern correction ==========
+# ============================================================
+# ============================================================
+# ============================================================
+
+
+
+# --- 1. Define traits ---
+# ============================================================
+# Compute residuals and store variable names in 'variables'
+# ============================================================
+
+# ============================================================
+# Compute residuals for all traits and store transformed names
+# ============================================================
+Data<-read.csv2("data.csv",header=TRUE,sep=";",dec=",", stringsAsFactors = FALSE)
+
+
+all_traits <- c(
+  "Growth_rate", "Delta_telomere_experiment", "Telomere_pre_hibernation",
+  "log_Mean_cortisol", "Number_transition",
+  "Offspring_per_litter", "Offspring_number", "Offspring_growth_rate",
+  "Temperature_torpor", "Torpor_bout_duration", "Time_inter_torpor", "Time_torpor"
+)
+
+hibernation_traits <- c("Temperature_torpor","Torpor_bout_duration","Time_inter_torpor","Time_torpor")
+
+# Create empty vector to store names of transformed variables
+variables <- c()
+
+for (var in all_traits) {
+  
+  # Determine fixed effects formula and columns to keep
+  if (var %in% hibernation_traits) {
+    fixed_effects <- "~ Sex + Hamster_location"
+    temp_data <- na.omit(Data[, c(var, "Mother", "Sex", "Hamster_location")])
+  } else {
+    fixed_effects <- "~ Sex"
+    temp_data <- na.omit(Data[, c(var, "Mother", "Sex")])
+  }
+  
+  # Fit LME
+  model <- lme(as.formula(paste(var, fixed_effects)),
+               random = ~1 | Mother,
+               method = "ML",
+               data = temp_data)
+  
+  # Store residuals in Data
+  res_name <- paste0("res_", var)
+  Data[, res_name] <- NA
+  Data[rownames(temp_data), res_name] <- residuals(model)
+  
+  # Append transformed variable name to variables vector
+  variables <- c(variables, res_name)
+  
+  cat(sprintf("Residuals for %s computed: %d values\n", var, sum(!is.na(residuals(model)))))
+}
+
+# Check resulting variables
+
+
+categories <- list(
+  Reproduction = c("res_Offspring_per_litter", "res_Offspring_growth_rate", "res_Offspring_number"),
+  Hibernation = c( "res_Temperature_torpor","res_Torpor_bout_duration", 
+                   "res_Time_inter_torpor", "res_Time_torpor"),
+  Telomere = c("res_Delta_telomere_experiment", "res_Telomere_pre_hibernation"),
+  Cortisol = c("res_log_Mean_cortisol"),
+  Transition = c("res_Number_transition"),
+  Growth = c("res_Growth_rate")
+)
+
+# ============================================================
+# === 2. Utility functions ==================================
+# ============================================================
+calculate_kmo <- function(data, vars) {
+  kmo_result <- KMO(data[, vars, drop = FALSE])
+  return(kmo_result$MSA[1])
+}
+
+test_bartlett <- function(data, vars) {
+  corr_mat <- cor(data[, vars, drop = FALSE])
+  if(det(corr_mat) < 1e-10) return(1)
+  bartlett_test <- cortest.bartlett(corr_mat, n = nrow(data))
+  return(bartlett_test$p.value)
+}
+
+check_categories <- function(vars, categories) {
+  used_cats <- sapply(vars, function(v) {
+    cat_name <- names(Filter(function(x) v %in% x, categories))
+    if(length(cat_name)==0) return(NA)
+    return(cat_name)
+  })
+  return(length(unique(used_cats)) == length(vars))
+}
+
+# ============================================================
+# === 3. Generate all valid combinations ====================
+# ============================================================
+vars_to_check <- intersect(variables, names(Data))
+combinations <- unlist(
+  lapply(2:length(vars_to_check), function(i) combn(vars_to_check, i, simplify=FALSE)),
+  recursive=FALSE
+)
+
+valid_combinations <- Filter(function(x) check_categories(x, categories), combinations)
+
+kmo_scores <- c()
+valid_sets  <- list()
+
+# ============================================================
+# === 4. Optimize variable selection (KMO + Bartlett) =======
+# ============================================================
+for (comb in valid_combinations) {
+  subset <- na.omit(Data[, comb, drop=FALSE])
+  
+  bartlett_p <- tryCatch(test_bartlett(subset, comb), error=function(e) NA)
+  if(is.na(bartlett_p) || bartlett_p >= 0.05) next
+  
+  kmo_val <- tryCatch(calculate_kmo(subset, comb), error=function(e) NA)
+  if(!is.na(kmo_val)) {
+    kmo_scores <- c(kmo_scores, kmo_val)
+    valid_sets <- append(valid_sets, list(comb))
+  }
+}
+
+# ============================================================
+# === 5. Identify best combination ==========================
+# ============================================================
+if(length(kmo_scores) > 0) {
+  best_index <- which.max(kmo_scores)
+  best_combination <- valid_sets[[best_index]]
   best_kmo <- max(kmo_scores)
   
-  # Display result 
-  cat("The best combination of variables is :", paste(best_combination, collapse = ", "), "\n")
-  cat("The best KMO score (Overall MSA) is :", best_kmo, "\n")
+  cat("✅ Best variable combination:", paste(best_combination, collapse=", "), "\n")
+  cat("✅ Best KMO score:", round(best_kmo,4), "\n")
 } else {
-  cat("No significant combination was found with a Bartlett test.")
+  stop("No valid combination according to Bartlett’s test.")
+}
+#The PCA is the same between corrected and uncorrected hibernation variables.
+
+
+
+# ============================================================
+# === Female-only PCA and LME =================================
+# ============================================================
+
+# ============================================================
+# 1. Corrected hibernation data 
+# ============================================================
+Data<-read.csv2("data.csv",header=TRUE,sep=";",dec=",", stringsAsFactors = FALSE)
+
+DataF <- subset(Data, Sex == "F")
+
+
+hibernation_traits <- c("Temperature_torpor","Torpor_bout_duration","Time_inter_torpor","Time_torpor")
+res_hibernation <- c()  
+for (var in hibernation_traits) {
+ 
+  temp_data <- na.omit(DataF[, c(var, "Mother", "Hamster_location")])
+  
+  model <- lme(as.formula(paste(var, "~ Hamster_location")),
+               random = ~1 | Mother,
+               method = "ML",
+               data = temp_data)
+  
+  res_name <- paste0("res_", var)
+  DataF[, res_name] <- NA
+  DataF[rownames(temp_data), res_name] <- residuals(model)
+  
+  res_hibernation <- c(res_hibernation, res_name)
+  
+  cat(sprintf("Residuals for %s computed: %d values\n", var, sum(!is.na(residuals(model)))))
 }
 
-#ACP test on selected variable
-R2<-cor(dataACPM1)
-cortest.bartlett(R2,n=16)
-KMO(R2)
-res.PCAM1<-PCA(dataACPM1, graph = TRUE)
-eig.val <- get_eigenvalue(res.PCAM1)
-eig.val
+variables_F <- c(
+  "Growth_rate", "Delta_telomere_experiment", "Telomere_pre_hibernation",
+  "res_Temperature_torpor", "res_Torpor_bout_duration", "res_Time_inter_torpor", "res_Time_torpor",
+  "log_Mean_cortisol", "Offspring_per_litter", "Offspring_growth_rate",
+  "Offspring_number", "Number_transition"
+)
 
-# Extraire les contributions des variables pour chaque axe
-contributions <- res.PCAM1$var$contrib
-print(contributions)
 
-#permutation test
-permutation_test_acp <- function(data, n_permutations = 1000) {
-  if (!is.data.frame(data)) stop("Les données doivent être un data.frame.")
-  if (anyNA(data)) stop("Le jeu de données contient des valeurs manquantes.")
-  
-  # Réaliser l'ACP sur les données originales
-  res_pca <- PCA(data, scale.unit = TRUE, graph = FALSE)
-  obs_values <- res_pca$eig[, 1]  # Valeurs propres observées
-  num_pcs <- length(obs_values)
-  
-  # Initialisation pour stocker les résultats des permutations
-  permuted_values <- matrix(NA, ncol = num_pcs, nrow = n_permutations)
-  
-  for (i in 1:n_permutations) {
-    permuted_data <- as.data.frame(lapply(data, sample))
-    
-    perm_res <- tryCatch(
-      PCA(permuted_data, scale.unit = TRUE, graph = FALSE),
-      error = function(e) {
-        message(paste("Erreur lors de l'ACP à l'itération", i, ":", e$message))
-        return(NULL)
-      }
-    )
-    
-    if (is.null(perm_res) || nrow(perm_res$eig) != num_pcs) next
-    
-    permuted_values[i, ] <- perm_res$eig[, 1]
+variables_F <- c(
+  "Growth_rate",
+  "Delta_telomere_experiment",
+  "Telomere_pre_hibernation",
+  "res_Temperature_torpor", 
+  "res_Torpor_bout_duration", 
+  "res_Time_inter_torpor", 
+  "res_Time_torpor",
+  "log_Mean_cortisol",
+  "Offspring_per_litter",
+  "Offspring_growth_rate",
+  "Offspring_number",
+  "Number_transition"
+)
+
+# Generate all valid combinations
+vars_to_check <- intersect(variables_F, names(DataF))
+combinations <- unlist(
+  lapply(2:length(vars_to_check), function(i) combn(vars_to_check, i, simplify = FALSE)),
+  recursive = FALSE
+)
+valid_combinations <- Filter(function(x) check_categories(x, categories_F), combinations)
+
+kmo_scores <- c()
+best_sets <- list()
+
+for (comb in valid_combinations) {
+  subset <- na.omit(DataF[, comb, drop=FALSE])
+  bartlett_p <- tryCatch(test_bartlett(subset, comb), error=function(e) NA)
+  if (is.na(bartlett_p) || bartlett_p >= 0.05) next
+  kmo_val <- tryCatch(calculate_kmo(subset, comb), error=function(e) NA)
+  if (!is.na(kmo_val)) {
+    kmo_scores <- c(kmo_scores, kmo_val)
+    best_sets <- append(best_sets, list(comb))
   }
+}
+
+# Select best combination
+best_index <- which.max(kmo_scores)
+best_combination <- best_sets[[best_index]]
+best_kmo <- max(kmo_scores)
+
+cat("✅ Female best variables:", paste(best_combination, collapse=", "), "\n")
+cat("✅ KMO:", round(best_kmo,4), "\n")
+
+#The PCA is the same between corrected and uncorrected hibernation variables.
+
+# ============================================================
+# === Male-only PCA and LME ==================================
+# ============================================================
+Data<-read.csv2("data.csv",header=TRUE,sep=";",dec=",", stringsAsFactors = FALSE)
+
+DataM <- subset(Data, Sex == "M")
+
+
+hibernation_traits <- c("Temperature_torpor","Torpor_bout_duration","Time_inter_torpor","Time_torpor")
+res_hibernation <- c()  
+
+for (var in hibernation_traits) {
+  temp_data <- na.omit(DataM[, c(var, "Mother", "Hamster_location")])
   
-  print("Dimensions des valeurs permutées :")
-  print(dim(permuted_values))
-  print("Longueur des valeurs propres observées :")
-  print(length(obs_values))
+  model <- lme(as.formula(paste(var, "~ Hamster_location")),
+               random = ~1 | Mother,
+               method = "ML",
+               data = temp_data)
   
-  # Calcul des p-valeurs
-  p_values <- sapply(1:ncol(permuted_values), function(j) {
-    mean(permuted_values[, j] >= obs_values[j], na.rm = TRUE)
+  res_name <- paste0("res_", var)
+  DataM[, res_name] <- NA
+  DataM[rownames(temp_data), res_name] <- residuals(model)
+  
+  res_hibernation <- c(res_hibernation, res_name)
+  
+  cat(sprintf("Residuals for %s computed: %d values\n", var, sum(!is.na(residuals(model)))))
+}
+
+variables_M <- c(
+  "Growth_rate", "Delta_telomere_experiment", "Telomere_pre_hibernation",
+  "res_Temperature_torpor", "res_Torpor_bout_duration", "res_Time_inter_torpor", "res_Time_torpor",
+  "log_Mean_cortisol", "Offspring_per_litter", "Offspring_growth_rate",
+  "Offspring_number", "Number_transition"
+)
+
+
+variables_M <- c(
+  "Growth_rate",
+  "Delta_telomere_experiment",
+  "Telomere_pre_hibernation",
+  "res_Temperature_torpor", 
+  "res_Torpor_bout_duration", 
+  "res_Time_inter_torpor", 
+  "res_Time_torpor",
+  "log_Mean_cortisol",
+  "Offspring_per_litter",
+  "Offspring_growth_rate",
+  "Offspring_number",
+  "Number_transition"
+)
+
+# Generate all valid combinations (2–3 variables, at least 1 Reproduction)
+has_reproduction <- function(vars, categories) any(vars %in% categories$Reproduction)
+vars_to_check <- intersect(variables_M, names(DataM))
+combinations <- unlist(lapply(2:3, function(i) combn(vars_to_check, i, simplify=FALSE)), recursive=FALSE)
+valid_combinations <- Filter(function(x) check_categories(x, categories_M) && has_reproduction(x, categories_M), combinations)
+
+kmo_scores <- c()
+best_sets <- list()
+for(comb in valid_combinations) {
+  subset <- na.omit(DataM[, comb, drop=FALSE])
+  if(nrow(subset) < 10 || ncol(subset) < 2) next
+  bartlett_p <- tryCatch(test_bartlett(subset, comb), error=function(e) NA)
+  if(is.na(bartlett_p) || bartlett_p >= 0.05) next
+  kmo_val <- tryCatch(calculate_kmo(subset, comb), error=function(e) NA)
+  if(!is.na(kmo_val)) {
+    kmo_scores <- c(kmo_scores, kmo_val)
+    best_sets <- append(best_sets, list(comb))
+  }
+}
+
+best_index <- which.max(kmo_scores)
+best_combination <- best_sets[[best_index]]
+best_kmo <- max(kmo_scores)
+cat("✅ Male best variables:", paste(best_combination, collapse=", "), "\n")
+cat("✅ KMO:", round(best_kmo,4), "\n")
+
+
+#The PCA is the same between corrected and uncorrected hibernation variables.
+
+
+# ============================================================
+# ============================================================
+# ============================================================
+# === 1. Test without the constraint of ACP with reproduction 
+# ============================================================
+# ============================================================
+# ============================================================
+
+# ============================================================
+# === 1. Load data and compute residuals ====================
+# ============================================================
+
+Data<-read.csv2("data.csv",header=TRUE,sep=";",dec=",", stringsAsFactors = FALSE)
+
+traits <- c(
+  "Growth_rate", "Temperature_torpor", "Torpor_bout_duration",
+  "Time_inter_torpor", "Time_torpor", "Delta_telomere_experiment",
+  "Telomere_pre_hibernation",
+  "log_Mean_cortisol", "Number_transition",
+  "Offspring_per_litter", "Offspring_number", "Offspring_growth_rate"
+)
+
+variables <- c()
+
+for (var in traits) {
+  temp_data <- na.omit(Data[, c(var, "Mother", "Sex")])
+  model <- lme(as.formula(paste(var, "~ Sex")), random = ~1|Mother, method="ML", data=temp_data)
+  
+  res_name <- paste0("res_", var)
+  Data[, res_name] <- NA
+  Data[rownames(temp_data), res_name] <- residuals(model)
+  
+  variables <- c(variables, res_name)
+  cat(sprintf("Residuals for %s computed: %d values\n", var, sum(!is.na(residuals(model)))))
+}
+
+categories <- list(
+  Reproduction = c("res_Offspring_per_litter", "res_Offspring_growth_rate", "res_Offspring_number"),
+  Hibernation  = c("res_Temperature_torpor", "res_Torpor_bout_duration", "res_Time_inter_torpor", "res_Time_torpor"),
+  Telomere     = c("res_Delta_telomere_experiment", "res_Telomere_pre_hibernation"),
+  Cortisol     = c("res_log_Mean_cortisol"),
+  Transition   = c("res_Number_transition"),
+  Growth       = c("res_Growth_rate")
+)
+
+# ============================================================
+# === 2. Utility functions ==================================
+# ============================================================
+calculate_kmo <- function(data, vars) {
+  kmo_result <- KMO(data[, vars, drop=FALSE])
+  return(kmo_result$MSA[1])
+}
+
+test_bartlett <- function(data, vars) {
+  corr_mat <- cor(data[, vars, drop=FALSE])
+  if(det(corr_mat) < 1e-10) return(1)
+  bartlett_test <- cortest.bartlett(corr_mat, n=nrow(data))
+  return(bartlett_test$p.value)
+}
+
+check_categories <- function(vars, categories) {
+  used_cats <- sapply(vars, function(v) {
+    cat_name <- names(Filter(function(x) v %in% x, categories))
+    if(length(cat_name) == 0) return(NA)
+    return(cat_name)
   })
+  return(length(unique(used_cats)) == length(vars))
+}
+
+# ============================================================
+# === 3. Generate all valid combinations ====================
+# ============================================================
+vars_to_check <- intersect(variables, names(Data))
+combinations <- unlist(
+  lapply(2:length(vars_to_check), function(i) combn(vars_to_check, i, simplify=FALSE)),
+  recursive=FALSE
+)
+
+# Keep only combinations respecting one variable per category
+valid_combinations <- Filter(function(x) check_categories(x, categories), combinations)
+
+# ============================================================
+# === 4. Compute KMO and Bartlett ===========================
+# ============================================================
+kmo_scores <- c()
+valid_sets <- list()
+
+for(comb in valid_combinations){
+  subset <- na.omit(Data[, comb, drop=FALSE])
   
-  results <- data.frame(
-    PC = paste0("PC", 1:num_pcs),
-    Observed_Eigenvalue = obs_values,
-    p_value = p_values
-  )
+  # Bartlett test first
+  bartlett_p <- tryCatch(test_bartlett(subset, comb), error=function(e) NA)
+  if(is.na(bartlett_p) || bartlett_p >= 0.05) next  # skip unsuitable correlation matrices
   
-  return(results)
+  # KMO calculation
+  kmo_val <- tryCatch(calculate_kmo(subset, comb), error=function(e) NA)
+  if(!is.na(kmo_val)){
+    kmo_scores <- c(kmo_scores, kmo_val)
+    valid_sets <- append(valid_sets, list(comb))
+  }
+}
+
+# ============================================================
+# === 5. Identify best combination ==========================
+# ============================================================
+if(length(kmo_scores) > 0){
+  best_index <- which.max(kmo_scores)
+  best_combination <- valid_sets[[best_index]]
+  best_kmo <- max(kmo_scores)
+  
+  cat("✅ Best variable combination:", paste(best_combination, collapse=", "), "\n")
+  cat("✅ Best KMO score:", round(best_kmo, 4), "\n")
+} else {
+  stop("No valid combination according to Bartlett’s test and category constraint.")
+}
+
+#The PCA is the same with or without the constraint of reproduction
+
+
+# ============================================================
+# === Female-only PCA and LME =================================
+# ============================================================
+# ============================================================
+# === 1. Load data and define variables =====================
+# ============================================================
+
+Data<-read.csv2("data.csv",header=TRUE,sep=";",dec=",", stringsAsFactors = FALSE)
+
+DataF <- subset(Data, Sex == "F")
+
+variables_F <- c(
+  "Growth_rate", "Delta_telomere_experiment", "Telomere_pre_hibernation",
+  "Temperature_torpor", "Torpor_bout_duration", "Time_inter_torpor", "Time_torpor",
+  "log_Mean_cortisol", "Offspring_per_litter", "Offspring_growth_rate",
+  "Offspring_number", "Number_transition"
+)
+
+categories_F <- list(
+  Reproduction = c("Offspring_per_litter", "Offspring_growth_rate", "Offspring_number"),
+  Hibernation  = c("Temperature_torpor", "Torpor_bout_duration", "Time_inter_torpor", "Time_torpor"),
+  Telomere     = c("Delta_telomere_experiment", "Telomere_pre_hibernation"),
+  Cortisol     = c("log_Mean_cortisol"),
+  Transition   = c("Number_transition"),
+  Growth       = c("Growth_rate")
+)
+
+# ============================================================
+# === 2. Utility functions ==================================
+# ============================================================
+calculate_kmo <- function(data, vars) {
+  kmo_result <- KMO(data[, vars, drop=FALSE])
+  return(kmo_result$MSA[1])
+}
+
+test_bartlett <- function(data, vars) {
+  corr_mat <- cor(data[, vars, drop=FALSE])
+  if (det(corr_mat) < 1e-10) return(1)  # skip if determinant too small (singular matrix)
+  bartlett_test <- cortest.bartlett(corr_mat, n=nrow(data))
+  return(bartlett_test$p.value)
+}
+
+check_categories <- function(vars, categories) {
+  used_cats <- sapply(vars, function(v) {
+    cat_name <- names(Filter(function(x) v %in% x, categories))
+    if (length(cat_name) == 0) return(NA)
+    return(cat_name)
+  })
+  return(length(unique(used_cats)) == length(vars))  # TRUE if all vars from different categories
+}
+
+# ============================================================
+# === 3. Generate all valid combinations ====================
+# ============================================================
+vars_to_check <- intersect(variables_F, names(DataF))
+
+# Generate all combinations of at least 2 variables
+combinations <- unlist(
+  lapply(2:length(vars_to_check), function(i) combn(vars_to_check, i, simplify=FALSE)),
+  recursive=FALSE
+)
+
+# Keep only combinations with one variable per category
+valid_combinations <- Filter(function(x) check_categories(x, categories_F), combinations)
+
+# ============================================================
+# === 4. Compute KMO and Bartlett ===========================
+# ============================================================
+kmo_scores <- c()
+valid_sets <- list()
+
+for (comb in valid_combinations) {
+  subset <- na.omit(DataF[, comb, drop=FALSE])
+  
+  # Skip if too few observations
+  if (nrow(subset) < length(comb) + 1) next
+  
+  # Bartlett test
+  bartlett_p <- tryCatch(test_bartlett(subset, comb), error=function(e) NA)
+  if (is.na(bartlett_p) || bartlett_p >= 0.05) next
+  
+  # KMO test
+  kmo_val <- tryCatch(calculate_kmo(subset, comb), error=function(e) NA)
+  if (!is.na(kmo_val)) {
+    kmo_scores <- c(kmo_scores, kmo_val)
+    valid_sets <- append(valid_sets, list(comb))
+  }
+}
+
+# ============================================================
+# === 5. Select best combination ============================
+# ============================================================
+if (length(kmo_scores) > 0) {
+  best_index <- which.max(kmo_scores)
+  best_combination <- valid_sets[[best_index]]   # ✅ FIX: was best_sets (typo)
+  best_kmo <- max(kmo_scores)
+  
+  cat("✅ Best female variable combination:", paste(best_combination, collapse=", "), "\n")
+  cat("✅ Best KMO score:", round(best_kmo, 4), "\n")
+} else {
+  stop("❌ No valid combination found (Bartlett test not significant or KMO failed).")
+}
+
+#The ACP is the same with or without the constraint of reproduction.
+
+
+# ============================================================
+# === 1. Load data and define variables =====================
+# ============================================================
+Data<-read.csv2("data.csv",header=TRUE,sep=";",dec=",", stringsAsFactors = FALSE)
+
+# Subset only males
+DataM <- subset(Data, Sex == "M")
+
+variables_M <- c(
+  "Growth_rate", "Delta_telomere_experiment", "Telomere_pre_hibernation",
+  "Temperature_torpor", "Torpor_bout_duration", "Time_inter_torpor", "Time_torpor",
+  "log_Mean_cortisol", "Offspring_per_litter", "Offspring_growth_rate",
+  "Offspring_number", "Number_transition"
+)
+
+categories_M <- list(
+  Reproduction = c("Offspring_per_litter", "Offspring_growth_rate", "Offspring_number"),
+  Hibernation  = c("Temperature_torpor", "Torpor_bout_duration", "Time_inter_torpor", "Time_torpor"),
+  Telomere     = c("Delta_telomere_experiment", "Telomere_pre_hibernation"),
+  Cortisol     = c("log_Mean_cortisol"),
+  Transition   = c("Number_transition"),
+  Growth       = c("Growth_rate")
+)
+
+# ============================================================
+# === 2. Utility functions ==================================
+# ============================================================
+calculate_kmo <- function(data, vars) {
+  kmo_result <- KMO(data[, vars, drop=FALSE])
+  return(kmo_result$MSA[1])
+}
+
+test_bartlett <- function(data, vars) {
+  corr_mat <- cor(data[, vars, drop=FALSE])
+  if (det(corr_mat) < 1e-10) return(1)
+  bartlett_test <- cortest.bartlett(corr_mat, n=nrow(data))
+  return(bartlett_test$p.value)
+}
+
+check_categories <- function(vars, categories) {
+  used_cats <- sapply(vars, function(v) {
+    cat_name <- names(Filter(function(x) v %in% x, categories))
+    if (length(cat_name) == 0) return(NA)
+    return(cat_name)
+  })
+  return(length(unique(used_cats)) == length(vars))
+}
+
+# ============================================================
+# === 3. Generate all valid combinations ====================
+# ============================================================
+vars_to_check <- intersect(variables_M, names(DataM))
+
+# Generate all combinations of at least 2 variables
+combinations <- unlist(
+  lapply(2:length(vars_to_check), function(i) combn(vars_to_check, i, simplify=FALSE)),
+  recursive=FALSE
+)
+
+# Keep only combinations with one variable per category
+valid_combinations <- Filter(function(x) check_categories(x, categories_M), combinations)
+
+# ============================================================
+# === 4. Compute KMO and Bartlett ===========================
+# ============================================================
+kmo_scores <- c()
+valid_sets <- list()
+
+for (comb in valid_combinations) {
+  subset <- na.omit(DataM[, comb, drop=FALSE])
+  
+  # Skip if not enough data
+  if (nrow(subset) < length(comb) + 1) next
+  
+  # Bartlett test (must be significant)
+  bartlett_p <- tryCatch(test_bartlett(subset, comb), error=function(e) NA)
+  if (is.na(bartlett_p) || bartlett_p >= 0.05) next
+  
+  # KMO test
+  kmo_val <- tryCatch(calculate_kmo(subset, comb), error=function(e) NA)
+  if (!is.na(kmo_val)) {
+    kmo_scores <- c(kmo_scores, kmo_val)
+    valid_sets <- append(valid_sets, list(comb))
+  }
+}
+
+# ============================================================
+# === 5. Select best combination ============================
+# ============================================================
+if (length(kmo_scores) > 0) {
+  best_index <- which.max(kmo_scores)
+  best_combination <- valid_sets[[best_index]]
+  best_kmo <- max(kmo_scores)
+  
+  cat("✅ Best male variable combination:", paste(best_combination, collapse=", "), "\n")
+  cat("✅ Best KMO score:", round(best_kmo, 4), "\n")
+} else {
+  stop("❌ No valid combination found for males (Bartlett test not significant or KMO failed).")
 }
 
 
-# Apply the permutation test function to a dataset
-dataimpM1<-as.data.frame(dataimpM1)
-is.data.frame(dataimpM1)
-res_permM <- permutation_test_acp(dataimpM1, n_permutations = 1000)
-print(res_permM)
+#The ACP is different with and without the constraint of reproduction.
 
-#test the effect of sex, littersize and Birth on principal component
-DataM$ACPM<-res.PCAM1$ind$coord[,1]
-testM1<-lme(ACPM ~Littersize+Birth, random=~1|Mother,method="ML", na.action = "na.fail", data=DataM)
-summary(model.avg(dredge(testM1, fixed=~+(1|Mother),rank="AICc",m.lim = c(NA,4)),delta<5))
-testM1<-lme(ACPM ~Littersize, random=~1|Mother,method="ML", na.action = "na.fail", data=DataM)
-summary(testM1)
+# ============================================================
+# === 6. PCA and PC1 extraction =================
+# ============================================================
+vars_pca <- best_combination
+data_pca <- na.omit(DataM[, vars_pca, drop=FALSE])
+data_scaled <- scale(data_pca)
 
-#validation
-residuals <- resid(testM1)
-#density
-plot(density(residuals), main = paste("Density Plot of Residuals for", model_name), xlab = "Residuals", col = "blue", lwd = 2)
-curve(dnorm(x, mean = mean(residuals), sd = sd(residuals)), col = "red", lwd = 2, add = TRUE)
-legend("topright", legend = c("Residuals Density", "Normal Distribution"), col = c("blue", "red"), lwd = c(2, 2))
+res_pca <- PCA(data_scaled, scale.unit=FALSE, ncp=2, graph=FALSE)
+DataM$Syndrome_PC1 <- NA
+DataM[rownames(data_pca), "Syndrome_PC1"] <- res_pca$ind$coord[,1]
+rownames(res_pca$var$coord) <- c("Telomere length variation", "log(Mean cortisol)", "Number of transitions") 
 
-# QQ-Plot of Residuals
-qqPlot(residuals, main = paste("QQ-Plot of Residuals for", model_name))  # Requires car::qqPlot
+fviz_pca_var(
+  res_pca, 
+  axes = c(1, 2),
+  col.var = "red",
+  repel = TRUE,
+  arrowsize = 1.2,        
+  labelsize = 6,          
+  title = "Biplot PCA: variables only",
+  circle = TRUE
+) + 
+  coord_equal() +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid = element_line(color = "grey90"),
+    axis.title = element_text(size = 14, face = "bold"),
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    plot.margin = margin(10, 10, 10, 10)
+  )
 
-# Breusch-Pagan test
-bptest(testM1)
 
-# Calculate R?
-r2_results <- r2(testM1)
-print(r2_results)
+# ============================================================
+# === 7. PCA robustness check via permutation test ==========
+# ============================================================
+n_perm <- 500
+n_pc <- 2
+perm_var <- matrix(NA, nrow=n_perm, ncol=n_pc)
+var_obs <- res_pca$eig[1:n_pc,2]
+
+for(p in 1:n_perm) {
+  perm_data <- apply(data_scaled, 2, sample)
+  res_perm <- tryCatch(PCA(perm_data, scale.unit=FALSE, ncp=n_pc, graph=FALSE), error=function(e) NULL)
+  if(!is.null(res_perm)) perm_var[p,] <- res_perm$eig[1:n_pc,2]
+}
+
+p_values <- sapply(1:n_pc, function(k) mean(perm_var[,k] >= var_obs[k], na.rm=TRUE))
+
+for(k in 1:n_pc) {
+  cat(sprintf("PC%d: Observed variance = %.2f%%, Permutation p-value = %.3f\n", k, var_obs[k], p_values[k]))
+}
+
+# ============================================================
+# === 8. LME for PC1 ~ Littersize, Birth, Sex =============
+# ============================================================
+Datana <- na.omit(DataM[, c("Syndrome_PC1","Littersize","Birth","Mother","Sex")])
+
+model_full <- lme(Syndrome_PC1 ~ Littersize + Birth,
+                  random = ~1 | Mother, data=Datana, method="ML")
+
+# Model selection using dredge (AICc)
+model_selection <- dredge(model_full, fixed = ~ +(1|Mother), rank="AICc", m.lim=c(NA,4))
+
+
+
+
+
+
+
+# ==============================================================================
+# =Link between Growth rate and body mass at birth =============================
+# ==============================================================================
+
+
+
+Datana <- na.omit(Data[, c("Body_mass_birth","Growth_rate","Mother","Sex")])
+model <- lme(Growth_rate~Body_mass_birth+Sex,
+                  random = ~1 | Mother, data=Datana)
+summary(model)
+residuals <- resid(model)
+plot(density(residuals), main="Residual Density", xlab="Residuals")
+curve(dnorm(x, mean=mean(residuals), sd=sd(residuals)), col="red", lwd=2, add=TRUE)
+bptest(model_simple)
+performance::r2(model_simple)
+
+ggplot(Datana, aes(x=Body_mass_birth, y=Growth_rate, color=Sex)) +
+  geom_point(size=3, alpha=0.8) +
+  geom_smooth(method="lm", se=TRUE, aes(fill=Sex)) +
+  scale_color_manual(values=c("F"="#E41A1C", "M"="#377EB8")) +
+  scale_fill_manual(values=c("F"="#E41A1C", "M"="#377EB8")) +
+  theme_classic(base_size=14) +
+  labs(x="Body mass at birth", y="Growth rate", color="Sex", fill="Sex") +
+  theme(legend.position="top")
+
+
 
 
